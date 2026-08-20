@@ -48,7 +48,9 @@ class CyberCalcApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => HistoryService()),
         Provider(create: (_) => AudioService()),
         // 火山引擎 ASR 语音识别服务（替换旧的 speech_to_text）
-        ChangeNotifierProvider(create: (_) => VolcAsrService()),
+        ChangeNotifierProvider(
+          create: (_) => VolcAsrService()..initialize(),
+        ),
       ],
       child: MaterialApp(
         title: 'CyberCalc',

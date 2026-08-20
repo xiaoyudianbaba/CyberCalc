@@ -3,8 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/voice_feedback_service.dart';
-import '../services/volc_asr_service.dart';
-import '../services/volc_asr_config.dart';
+import '../services/update_service.dart';
 import '../models/voice_mode.dart';
 import '../models/voice_profile.dart';
 import '../widgets/asr_settings_section.dart';
@@ -62,6 +61,13 @@ class SettingsScreen extends StatelessWidget {
               _buildSectionTitle('语音识别'),
               const SizedBox(height: 8),
               const AsrSettingsSection(),
+
+              const SizedBox(height: 24),
+
+              // 应用升级
+              _buildSectionTitle('软件升级'),
+              const SizedBox(height: 8),
+              const UpdateSection(),
 
               const SizedBox(height: 32),
 
@@ -458,13 +464,254 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            '版本 1.0.0',
-            style: TextStyle(
-              color: CyberColors.disabledText,
-              fontSize: 12,
-              fontFamily: 'Orbitron',
-            ),
+          FutureBuilder<String>(
+            future: UpdateService().getCurrentVersion(),
+            builder: (context, snapshot) {
+              final version = snapshot.data ?? '1.0.0';
+              return Text(
+                '版本 $version',
+                style: TextStyle(
+                  color: CyberColors.disabledText,
+                  fontSize: 12,
+                  fontFamily: 'Orbitron',
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 软件升级区块
+class UpdateSection extends StatefulWidget {
+  const UpdateSection({super.key});
+
+  @override
+  State<UpdateSection> createState() => _UpdateSectionState();
+}
+
+class _UpdateSectionState extends State<UpdateSection> {
+  final _updateService = UpdateService();
+
+  bool _checking = false;
+  bool _downloading = false;
+  String _status = '';
+  ReleaseInfo? _latest;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkForUpdate();
+  }
+
+  Future<void> _checkForUpdate() async {
+    if (_checking) return;
+    setState(() {
+      _checking = true;
+      _status = '正在检查更新...';
+    });
+
+    final current = await _updateService.getCurrentVersion();
+    final latest = await _updateService.checkForUpdate();
+
+    if (!mounted) return;
+
+    setState(() {
+      _checking = false;
+      _latest = latest;
+      if (latest == null) {
+        _status = '检查更新失败，请检查网络';
+      } else {
+        final newest = _updateService.compareVersions(current, latest.version);
+        if (newest == latest.version && latest.version != current) {
+          _status = '发现新版本 v${latest.version}，点击升级';
+        } else {
+          _status = '已是最新版本 v$current';
+        }
+      }
+    });
+  }
+
+  Future<void> _doUpgrade() async {
+    final latest = _latest;
+    if (latest == null || !latest.hasApk) {
+      setState(() => _status = '未找到可下载的 APK');
+      return;
+    }
+
+    // 确认对话框
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: CyberColors.surface,
+        title: Text(
+          '升级到 v${latest.version}',
+          style: const TextStyle(fontFamily: 'Orbitron', color: Colors.white),
+        ),
+        content: SingleChildScrollView(
+          child: Text(
+            latest.body.isNotEmpty
+                ? latest.body
+                : '发现新版本，点击确定开始下载并升级。',
+            style: const TextStyle(
+                fontFamily: 'Orbitron', color: Colors.white70),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('确定',
+                style: TextStyle(color: CyberColors.navActive)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _downloading = true;
+      _status = '正在下载 ${latest.apkName ?? 'APK'}...';
+    });
+
+    final apkPath = await _updateService.downloadApk(
+      latest.apkUrl!,
+      latest.apkName ?? 'cybercalc-update.apk',
+    );
+
+    if (!mounted) return;
+
+    if (apkPath == null) {
+      setState(() {
+        _downloading = false;
+        _status = '下载失败，请重试';
+      });
+      return;
+    }
+
+    setState(() => _status = '正在安装...');
+
+    final (ok, msg) = await _updateService.installApk(apkPath);
+
+    if (!mounted) return;
+
+    setState(() {
+      _downloading = false;
+      _status = ok ? '已启动系统安装器' : '安装失败: $msg';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: CyberColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: CyberColors.functionGlow,
+          width: 1,
+        ),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.system_update_alt,
+                color: CyberColors.navActive,
+                size: 24,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _status.isEmpty ? '正在检查更新...' : _status,
+                  style: TextStyle(
+                    color: _status.startsWith('发现新版本')
+                        ? CyberColors.warning
+                        : _status.startsWith('已是最新')
+                            ? CyberColors.success
+                            : CyberColors.secondaryText,
+                    fontSize: 13,
+                    fontFamily: 'Orbitron',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 40,
+                  child: OutlinedButton.icon(
+                    onPressed:
+                        (_checking || _downloading) ? null : _checkForUpdate,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: CyberColors.secondaryText,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(
+                          color: CyberColors.secondaryText.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text(
+                      '检查更新',
+                      style: TextStyle(
+                          fontFamily: 'Orbitron', fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 40,
+                  child: ElevatedButton.icon(
+                    onPressed: (_checking || _downloading || _latest == null)
+                        ? null
+                        : _doUpgrade,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: CyberColors.navActive.withValues(alpha: 0.2),
+                      foregroundColor: CyberColors.navActive,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(
+                          color: CyberColors.navActive.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    icon: _downloading
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.system_update, size: 16),
+                    label: Text(
+                      _downloading ? '下载中' : '立即升级',
+                      style: const TextStyle(
+                          fontFamily: 'Orbitron', fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

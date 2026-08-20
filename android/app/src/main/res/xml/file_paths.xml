@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 应用文档目录，用于存放下载的 APK -->
+    <external-path
+        name="external_files"
+        path="."/>
+    <files-path
+        name="files"
+        path="."/>
+</paths>

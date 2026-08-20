@@ -52,13 +52,14 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     final text = asr.partialText;
     if (text.isEmpty) return;
 
-    final converted = ChineseNumberConverter.convertToMathExpression(text);
-    if (converted.isEmpty || converted == text) {
-      // 无法转换，说明是非计算语音，忽略
-      debugPrint('ASR: 忽略非计算语音: $text');
+    // 过滤 ASR 原始文本：只保留数字和运算符号，剔除全部中文/语气词/标点等
+    final filtered = ChineseNumberConverter.filterToMathExpression(text);
+    if (filtered.isEmpty) {
+      // 过滤后为空说明不是算式语音，丢弃本次结果（容错）
+      debugPrint('ASR: 过滤后无有效算式，忽略: $text');
       return;
     }
-    _handleVoiceResult(converted);
+    _handleVoiceResult(filtered);
   }
 
   /// ASR 开始聆听
@@ -487,10 +488,18 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         return;
       }
 
-      // 开始录音
+      // 先播报提示音并等待播报完成，再加静音缓冲延时，
+      // 确保提示音不被 ASR 录音录入
+      final prompt = '语音输入已开启，请说出算式';
+      await voice.speakVoiceStatusAndWait(prompt);
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // 提示音播放完毕后再开始录音
       final started = await asr.startListening();
       if (started) {
-        voice.speakVoiceStatus('语音输入已开启，请说出算式');
+        // 录音已开始，不再重复播报（避免提示音被录入）
+        debugPrint('ASR: 录音已开始');
       } else {
         // 启动失败（无权限、无API Key等），播报错误
         final error = asr.lastError;

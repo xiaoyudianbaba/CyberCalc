@@ -1,5 +1,7 @@
 /// 按键语音反馈服务
 /// 管理按键语音播报系统，支持多种语音模式和智能数字朗读
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../models/voice_mode.dart';
@@ -178,6 +180,15 @@ class VoiceFeedbackService extends ChangeNotifier {
     await _speak(status);
   }
 
+  /// 播报语音输入状态并等待播报完成
+  /// 用于语音输入场景：先播完提示音，再开启录音，避免提示音被 ASR 录入
+  Future<void> speakVoiceStatusAndWait(String status) async {
+    if (!_isInitialized) return;
+    if (_voiceMode == VoiceMode.silent) return;
+
+    await _speakAndWait(status);
+  }
+
   /// 内部播报方法（带中断和优先级控制）
   Future<void> _speak(String text) async {
     try {
@@ -189,6 +200,36 @@ class VoiceFeedbackService extends ChangeNotifier {
       await _tts.speak(text);
     } catch (e) {
       debugPrint('TTS speak error: $e');
+    }
+  }
+
+  /// 内部播报方法：等待播报完成后再返回
+  Future<void> _speakAndWait(String text) async {
+    try {
+      // 中断当前播报
+      if (_isSpeaking) {
+        await _tts.stop();
+      }
+
+      // 通过 completeHandler 等待播报完成
+      final completer = Completer<void>();
+      _tts.setCompletionHandler(() {
+        _isSpeaking = false;
+        notifyListeners();
+        if (!completer.isCompleted) completer.complete();
+      });
+      _tts.setErrorHandler((error) {
+        debugPrint('TTS Error: $error');
+        _isSpeaking = false;
+        notifyListeners();
+        if (!completer.isCompleted) completer.complete();
+      });
+
+      await _tts.speak(text);
+      // 等待播报完成，最多等 15 秒，避免卡死
+      await completer.future.timeout(const Duration(seconds: 15));
+    } catch (e) {
+      debugPrint('TTS speakAndWait error: $e');
     }
   }
 

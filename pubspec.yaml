@@ -1,7 +1,7 @@
 name: cybercalc
 description: "赛博朋克语音计算器 - Cyberpunk Voice Calculator"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.6+6
 
 environment:
   sdk: ^3.12.2
@@ -40,6 +40,11 @@ dependencies:
   record: ^7.0.0  # 音频录制（PCM 16kHz 16bit 单声道）
   permission_handler: ^11.0.0  # 运行时权限（麦克风）
   shared_preferences: ^2.3.0  # 本地配置持久化（API Key、模型名称）
+
+  # ========== 应用升级 ==========
+  http: ^1.6.0  # 检查版本/下载 APK
+  package_info_plus: ^10.2.1  # 获取当前版本号
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

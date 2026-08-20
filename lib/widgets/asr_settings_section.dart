@@ -1,5 +1,5 @@
 /// 火山引擎 ASR 配置设置区块
-/// 包含 Access Token、App ID、Cluster ID 的输入与持久化保存
+/// 包含 Access Token、App ID、Resource ID 的输入与持久化保存
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/volc_asr_service.dart';
@@ -16,7 +16,7 @@ class AsrSettingsSection extends StatefulWidget {
 class _AsrSettingsSectionState extends State<AsrSettingsSection> {
   late TextEditingController _tokenController;
   late TextEditingController _appIdController;
-  late TextEditingController _clusterController;
+  late TextEditingController _resourceController;
   late TextEditingController _urlController;
   bool _saving = false;
   String _saveStatus = '';
@@ -26,7 +26,7 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
     super.initState();
     _tokenController = TextEditingController();
     _appIdController = TextEditingController();
-    _clusterController = TextEditingController();
+    _resourceController = TextEditingController();
     _urlController = TextEditingController();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadConfig());
   }
@@ -35,7 +35,7 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
     final config = context.read<VolcAsrService>().config;
     _tokenController.text = config.accessToken ?? '';
     _appIdController.text = config.appId;
-    _clusterController.text = config.clusterId;
+    _resourceController.text = config.resourceId;
     _urlController.text = config.url;
   }
 
@@ -43,7 +43,7 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
   void dispose() {
     _tokenController.dispose();
     _appIdController.dispose();
-    _clusterController.dispose();
+    _resourceController.dispose();
     _urlController.dispose();
     super.dispose();
   }
@@ -57,13 +57,13 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
     final config = context.read<VolcAsrService>().config;
     final token = _tokenController.text.trim();
     final appId = _appIdController.text.trim();
-    final cluster = _clusterController.text.trim();
+    final resource = _resourceController.text.trim();
     final url = _urlController.text.trim();
 
     bool success = true;
     success &= await config.setAccessToken(token);
     success &= await config.setAppId(appId);
-    success &= await config.setClusterId(cluster);
+    success &= await config.setResourceId(resource);
     success &= await config.setUrl(
         url.isNotEmpty ? url : VolcAsrConfig.DEFAULT_URL);
 
@@ -71,6 +71,28 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
       _saving = false;
       _saveStatus = success ? '✓ 配置已保存' : '✗ 保存失败，请重试';
     });
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _saveStatus = '');
+    });
+  }
+
+  Future<void> _resetConfig() async {
+    setState(() {
+      _saving = true;
+      _saveStatus = '';
+    });
+
+    final config = context.read<VolcAsrService>().config;
+    final ok = await config.clear();
+
+    if (mounted) {
+      setState(() {
+        _saving = false;
+        _saveStatus = ok ? '✓ 已恢复默认配置' : '✗ 重置失败，请重试';
+        _loadConfig();
+      });
+    }
 
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) setState(() => _saveStatus = '');
@@ -137,12 +159,12 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
           ),
           const SizedBox(height: 12),
 
-          // Cluster ID
-          _buildLabel('Cluster ID (集群标识)', true),
+          // Resource ID
+          _buildLabel('Resource ID (资源标识)', true),
           const SizedBox(height: 4),
           _buildTextField(
-            controller: _clusterController,
-            hint: '控制台开通流式 ASR 后显示的 Cluster',
+            controller: _resourceController,
+            hint: '控制台开通流式 ASR 后显示的 Resource ID',
           ),
           const SizedBox(height: 12),
 
@@ -151,7 +173,7 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
           const SizedBox(height: 4),
           _buildTextField(
             controller: _urlController,
-            hint: '默认为火山引擎 v2 ASR 地址',
+            hint: '默认为火山引擎 v3 ASR 地址',
           ),
           const SizedBox(height: 16),
 
@@ -190,6 +212,32 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
                               fontSize: 13,
                             ),
                           ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 40,
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : _resetConfig,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: CyberColors.secondaryText,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(
+                          color: CyberColors.secondaryText.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    child: const Text(
+                      '恢复默认',
+                      style: TextStyle(
+                        fontFamily: 'Orbitron',
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ),
               ),

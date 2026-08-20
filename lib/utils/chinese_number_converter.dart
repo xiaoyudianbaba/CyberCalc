@@ -160,4 +160,38 @@ class ChineseNumberConverter {
     return chineseToDigit.keys.any((k) => text.contains(k)) ||
         chineseToOperator.keys.any((k) => text.contains(k));
   }
+
+  // ========== ASR 结果过滤（语音输入专用） ==========
+
+  /// 允许保留的算式字符：数字、运算符、括号、点、等号、百分号
+  static const String _allowedMathChars =
+      '0123456789+-×÷*/%.()= ';
+
+  /// 从 ASR 识别文本中过滤出纯算式字符串
+  /// 逻辑：先做中文→数字转换，再剔除全部中文对话、语气词、标点符号等
+  /// 只保留数字 0-9 和运算符 +-×÷*/%.()
+  /// 并把 * / 归一化为计算器使用的 × ÷
+  /// 过滤后为空字符串则说明不是算式语音，由调用方丢弃
+  static String filterToMathExpression(String rawText) {
+    if (rawText.isEmpty) return '';
+
+    // 1. 先转换中文数字/运算符（"三加五"→"3+5"）
+    String converted = convertToMathExpression(rawText);
+
+    // 2. 只保留允许的算式字符，剔除所有无关内容
+    final buffer = StringBuffer();
+    for (int i = 0; i < converted.length; i++) {
+      final char = converted[i];
+      if (_allowedMathChars.contains(char)) {
+        buffer.write(char);
+      }
+    }
+
+    // 3. 归一化乘除符号（计算器内部使用 × ÷）
+    return buffer
+        .toString()
+        .replaceAll('*', '×')
+        .replaceAll('/', '÷')
+        .replaceAll(' ', '');
+  }
 }

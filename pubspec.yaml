@@ -1,0 +1,55 @@
+name: cybercalc
+description: "赛博朋克语音计算器 - Cyberpunk Voice Calculator"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 语音识别
+  speech_to_text: ^7.0.0
+
+  # 语音合成
+  flutter_tts: ^4.2.2
+
+  # 音频播放
+  audioplayers: ^6.4.0
+
+  # 数据库
+  sqflite: ^2.4.1
+  path: ^1.9.1
+
+  # 状态管理
+  provider: ^6.1.2
+
+  # 字体
+  google_fonts: ^6.2.1
+
+  # 数学表达式解析
+  math_expressions: ^2.6.0
+
+  # Cupertino图标
+  cupertino_icons: ^1.0.8
+
+  # ========== 火山引擎 ASR 语音识别 ==========
+  web_socket_channel: ^3.0.0  # WebSocket 通信（火山 ASR 接口）
+  record: ^7.0.0  # 音频录制（PCM 16kHz 16bit 单声道）
+  permission_handler: ^11.0.0  # 运行时权限（麦克风）
+  shared_preferences: ^2.3.0  # 本地配置持久化（API Key、模型名称）
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/sounds/
+
+  # 字体由 google_fonts 包动态加载

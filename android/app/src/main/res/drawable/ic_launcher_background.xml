@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Dark gradient base (#0A0A0F to #1A1A2E simulated via layered rects) -->
+    <path
+        android:fillColor="#0A0A0F"
+        android:pathData="M0,0h108v108H0z" />
+    <!-- Mid-tone overlay for gradient effect -->
+    <path
+        android:fillColor="#12121E"
+        android:fillAlpha="0.5"
+        android:pathData="M0,0h108v54H0z" />
+    <!-- Subtle grid lines - horizontal -->
+    <path
+        android:strokeColor="#1A1A2E"
+        android:strokeWidth="0.3"
+        android:pathData="M0,18h108M0,36h108M0,54h108M0,72h108M0,90h108" />
+    <!-- Subtle grid lines - vertical -->
+    <path
+        android:strokeColor="#1A1A2E"
+        android:strokeWidth="0.3"
+        android:pathData="M18,0v108M36,0v108M54,0v108M72,0v108M90,0v108" />
+    <!-- Diagonal scan lines -->
+    <path
+        android:strokeColor="#1A1A2E"
+        android:strokeWidth="0.15"
+        android:fillAlpha="0.3"
+        android:pathData="M0,0l108,108M108,0l-108,108" />
+    <!-- Vignette darker border overlay -->
+    <path
+        android:strokeColor="#050508"
+        android:strokeWidth="4"
+        android:strokeAlpha="0.4"
+        android:fillColor="#00000000"
+        android:pathData="M2,2h104v104H2z" />
+</vector>

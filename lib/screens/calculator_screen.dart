@@ -1,0 +1,539 @@
+/// 计算器主屏幕
+/// 赛博朋克风格的计算器主界面
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/calculator_service.dart';
+import '../services/voice_feedback_service.dart';
+import '../services/audio_service.dart';
+import '../services/history_service.dart';
+import '../services/volc_asr_service.dart';
+import '../models/history_item.dart';
+import '../models/voice_mode.dart';
+import '../widgets/neon_button.dart';
+import '../widgets/display_panel.dart';
+import '../widgets/voice_button.dart';
+import '../widgets/voice_indicator.dart';
+import '../utils/chinese_number_converter.dart';
+import '../screens/settings_screen.dart';
+import '../theme/colors.dart';
+
+class CalculatorScreen extends StatefulWidget {
+  const CalculatorScreen({super.key});
+
+  @override
+  State<CalculatorScreen> createState() => _CalculatorScreenState();
+}
+
+class _CalculatorScreenState extends State<CalculatorScreen> {
+  final AudioService _audioService = AudioService();
+
+  @override
+  void initState() {
+    super.initState();
+    _audioService.initialize();
+    // 注册火山 ASR 结果回调
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final asr = context.read<VolcAsrService>();
+      asr.onResult = () => _handleAsrResult(asr);
+      asr.onListeningStarted = () => _onAsrListeningStarted();
+      asr.onListeningStopped = () => _onAsrListeningStopped();
+      asr.onError = (msg) => _onAsrError(msg);
+    });
+  }
+
+  @override
+  void dispose() {
+    _audioService.dispose();
+    super.dispose();
+  }
+
+  /// ASR 识别结果回调
+  void _handleAsrResult(VolcAsrService asr) {
+    final text = asr.partialText;
+    if (text.isEmpty) return;
+
+    final converted = ChineseNumberConverter.convertToMathExpression(text);
+    if (converted.isEmpty || converted == text) {
+      // 无法转换，说明是非计算语音，忽略
+      debugPrint('ASR: 忽略非计算语音: $text');
+      return;
+    }
+    _handleVoiceResult(converted);
+  }
+
+  /// ASR 开始聆听
+  void _onAsrListeningStarted() {
+    // 更新UI，显示聆听状态
+  }
+
+  /// ASR 停止聆听
+  void _onAsrListeningStopped() {
+    // 更新UI，隐藏聆听状态
+  }
+
+  /// ASR 错误处理
+  void _onAsrError(String msg) {
+    // 弹窗提示
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            msg,
+            style: const TextStyle(fontFamily: 'Orbitron'),
+          ),
+          backgroundColor: CyberColors.error.withValues(alpha: 0.8),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  /// 处理按键点击
+  void _handleKeyPress(String key) {
+    final calc = context.read<CalculatorService>();
+    final voice = context.read<VoiceFeedbackService>();
+
+    // 播放音效
+    _audioService.playKeySound(key);
+
+    // 处理按键语音反馈
+    final isDigit = RegExp(r'^[0-9.]$').hasMatch(key);
+
+    if (isDigit) {
+      // 智能模式：数字键不播报
+      if (voice.voiceMode != VoiceMode.smart) {
+        voice.speakKey(key);
+      }
+    } else {
+      // 非数字键，播报按键
+      voice.speakKey(key);
+    }
+
+    // 处理计算逻辑
+    switch (key) {
+      case 'C':
+        calc.clear();
+        break;
+      case '⌫':
+        calc.backspace();
+        break;
+      case '=':
+        calc.calculate();
+        // 播报结果
+        if (!calc.hasError) {
+          voice.speakResult(calc.result);
+          // 保存历史记录
+          _saveHistory(calc);
+        }
+        break;
+      case '+':
+      case '-':
+      case '×':
+      case '÷':
+        calc.inputOperator(key);
+        break;
+      default:
+        calc.inputDigit(key);
+        break;
+    }
+  }
+
+  /// 保存计算历史
+  void _saveHistory(CalculatorService calc) {
+    final history = context.read<HistoryService>();
+    final expression = calc.expression;
+    final result = calc.result;
+
+    if (expression.isNotEmpty && result.isNotEmpty) {
+      history.addItem(HistoryItem(
+        expression: expression,
+        result: result,
+        timestamp: DateTime.now(),
+        hasError: calc.hasError,
+      ));
+    }
+  }
+
+  /// 处理语音识别结果
+  void _handleVoiceResult(String convertedExpression) {
+    if (convertedExpression.isEmpty) return;
+
+    final calc = context.read<CalculatorService>();
+    calc.clear();
+
+    // 逐个输入识别到的字符
+    for (int i = 0; i < convertedExpression.length; i++) {
+      final char = convertedExpression[i];
+      if (RegExp(r'^[0-9.]$').hasMatch(char)) {
+        calc.inputDigit(char);
+      } else if ('+-×÷'.contains(char)) {
+        calc.inputOperator(char);
+      } else if (char == '=') {
+        calc.calculate();
+      }
+    }
+
+    // 如果表达式完整，自动计算
+    if (convertedExpression.isNotEmpty &&
+        !'+-×÷'.contains(convertedExpression[convertedExpression.length - 1])) {
+      calc.calculate();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: CyberColors.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // 标题栏
+            _buildTitleBar(),
+
+            // 显示面板
+            Consumer<CalculatorService>(
+              builder: (context, calc, child) {
+                return DisplayPanel(
+                  expression: calc.displayExpression,
+                  result: calc.displayText,
+                  hasError: calc.hasError,
+                  errorMessage: calc.errorMessage,
+                  isListening: context.watch<VolcAsrService>().isListening,
+                );
+              },
+            ),
+
+            // 语音识别指示器
+            Consumer<VolcAsrService>(
+              builder: (context, speech, child) {
+                return VoiceIndicator(
+                  isListening: speech.isListening,
+                  recognizedText: speech.partialText,
+                );
+              },
+            ),
+
+            // 按键区域
+            Expanded(
+              child: _buildKeypad(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建标题栏
+  Widget _buildTitleBar() {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: CyberColors.numberGlow.withValues(alpha: 0.2),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            'CYBERCALC',
+            style: TextStyle(
+              color: CyberColors.navActive,
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 3,
+              fontFamily: 'Orbitron',
+              shadows: [
+                Shadow(
+                  color: CyberColors.navActive.withValues(alpha: 0.5),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+          ),
+          Text(
+            ' v1.0',
+            style: TextStyle(
+              color: CyberColors.disabledText,
+              fontSize: 10,
+              fontFamily: 'Orbitron',
+            ),
+          ),
+          const Spacer(),
+          // 语音模式指示器
+          Consumer<VoiceFeedbackService>(
+            builder: (context, voice, child) {
+              final modeText = switch (voice.voiceMode) {
+                VoiceMode.full => '语音',
+                VoiceMode.smart => '智能',
+                VoiceMode.silent => '静音',
+              };
+              final modeColor = switch (voice.voiceMode) {
+                VoiceMode.full => CyberColors.voiceIdle,
+                VoiceMode.smart => CyberColors.warning,
+                VoiceMode.silent => CyberColors.disabledText,
+              };
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: modeColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: modeColor.withValues(alpha: 0.5),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    modeText,
+                    style: TextStyle(
+                      color: modeColor,
+                      fontSize: 12,
+                      fontFamily: 'Orbitron',
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建按键面板
+  Widget _buildKeypad() {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Column(
+        children: [
+          // 功能键行
+          _buildFunctionRow(),
+          const SizedBox(height: 8),
+          // 数字和运算符键（4行×4列）
+          Expanded(child: _buildNumberPad()),
+        ],
+      ),
+    );
+  }
+
+  /// 构建功能键行
+  Widget _buildFunctionRow() {
+    return Row(
+      children: [
+        // 语音键
+        Consumer<VolcAsrService>(
+          builder: (context, speech, child) {
+            return Expanded(
+              child: VoiceButton(
+                isListening: speech.isListening,
+                enabled: !speech.isListening || true,
+                onPressed: () => _toggleVoiceInput(),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 8),
+        // C 键
+        Expanded(
+          child: NeonButton(
+            label: 'C',
+            type: NeonButtonType.function,
+            onPressed: () => _handleKeyPress('C'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // ⌫ 键
+        Expanded(
+          child: NeonButton(
+            label: '⌫',
+            type: NeonButtonType.function,
+            onPressed: () => _handleKeyPress('⌫'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // ÷ 键
+        Expanded(
+          child: NeonButton(
+            label: '÷',
+            type: NeonButtonType.divide,
+            onPressed: () => _handleKeyPress('÷'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 构建数字按键面板（4行×4列）
+  Widget _buildNumberPad() {
+    return Column(
+      children: [
+        // 第1行：7 8 9 ×
+        _buildNumberRow(['7', '8', '9', '×']),
+        // 第2行：4 5 6 -
+        _buildNumberRow(['4', '5', '6', '-']),
+        // 第3行：1 2 3 +
+        _buildNumberRow(['1', '2', '3', '+']),
+        // 第4行：0 . =（0占两格）
+        _buildLastRow(),
+      ],
+    );
+  }
+
+  /// 构建数字行
+  Widget _buildNumberRow(List<String> keys) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: keys.map((key) {
+            final isOperator = '+-×÷'.contains(key);
+            NeonButtonType type;
+            if (isOperator) {
+              if (key == '+') type = NeonButtonType.add;
+              else if (key == '-') type = NeonButtonType.subtract;
+              else if (key == '×') type = NeonButtonType.multiply;
+              else type = NeonButtonType.divide;
+            } else {
+              type = NeonButtonType.number;
+            }
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: NeonButton(
+                  label: key,
+                  type: type,
+                  onPressed: () => _handleKeyPress(key),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  /// 构建最后一行（0 . =）
+  Widget _buildLastRow() {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            // 0 键占两格
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: NeonButton(
+                  label: '0',
+                  type: NeonButtonType.number,
+                  onPressed: () => _handleKeyPress('0'),
+                ),
+              ),
+            ),
+            // . 键
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: NeonButton(
+                  label: '.',
+                  type: NeonButtonType.number,
+                  onPressed: () => _handleKeyPress('.'),
+                ),
+              ),
+            ),
+            // = 键
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: NeonButton(
+                  label: '=',
+                  type: NeonButtonType.equals,
+                  onPressed: () => _handleKeyPress('='),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 切换语音输入状态
+  Future<void> _toggleVoiceInput() async {
+    final asr = context.read<VolcAsrService>();
+    final voice = context.read<VoiceFeedbackService>();
+
+    if (asr.isListening) {
+      // 停止录音 → 自动发送到火山 ASR → 结果通过 onResult 回调处理
+      await asr.stopListening();
+      voice.speakVoiceStatus('语音输入结束');
+    } else {
+      // 检查是否已配置 API Key
+      if (!asr.config.hasAccessToken) {
+        _showAsrConfigRequired();
+        return;
+      }
+
+      // 开始录音
+      final started = await asr.startListening();
+      if (started) {
+        voice.speakVoiceStatus('语音输入已开启，请说出算式');
+      } else {
+        // 启动失败（无权限、无API Key等），播报错误
+        final error = asr.lastError;
+        if (error.isNotEmpty) {
+          voice.speakVoiceStatus(error);
+          _onAsrError(error);
+        }
+      }
+    }
+  }
+
+  /// 显示需要配置 ASR 的提示
+  void _showAsrConfigRequired() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: CyberColors.surface,
+        title: const Text(
+          '需要配置语音识别',
+          style: TextStyle(fontFamily: 'Orbitron', color: Colors.white),
+        ),
+        content: const Text(
+          '请先在「设置」页面中配置火山引擎 ASR 的 API Key，\n然后即可使用语音输入功能。',
+          style: TextStyle(fontFamily: 'Orbitron', fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              // 跳转到设置页面
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+            child: const Text('去设置', style: TextStyle(color: Color(0xFF00F0FF))),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -33,6 +33,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     _audioService.initialize();
     // 注册火山 ASR 结果回调
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 加载历史记录（供输入框上方的历史列表展示）
+      context.read<HistoryService>().loadHistory();
       final asr = context.read<VolcAsrService>();
       asr.onResult = () => _handleAsrResult(asr);
       asr.onListeningStarted = () => _onAsrListeningStarted();
@@ -160,6 +162,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     if (convertedExpression.isEmpty) return;
 
     final calc = context.read<CalculatorService>();
+    final voice = context.read<VoiceFeedbackService>();
     calc.clear();
 
     // 逐个输入识别到的字符
@@ -179,6 +182,15 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         !'+-×÷'.contains(convertedExpression[convertedExpression.length - 1])) {
       calc.calculate();
     }
+
+    // ========== 语音输入结果播报（仅播报结果，不播报算式/过程） ==========
+    if (calc.hasError) {
+      // 计算报错/表达式非法时，做异常提示
+      voice.speakVoiceStatus('算式错误');
+    } else {
+      // 只播报最终结果："等于 XX"
+      voice.speakResult(calc.result);
+    }
   }
 
   @override
@@ -188,10 +200,13 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // 标题栏
+            // 标题栏（右上角含设置按钮）
             _buildTitleBar(),
 
-            // 显示面板
+            // 历史记录区域（位于输入框上方，支持垂直滚动）
+            _buildHistorySection(),
+
+            // 显示面板（输入框）
             Consumer<CalculatorService>(
               builder: (context, calc, child) {
                 return DisplayPanel(
@@ -220,6 +235,121 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 构建历史记录区域
+  /// 布局要求：标题栏 → 历史记录 → 输入框 → 按键区域
+  /// 列表支持垂直滚动，条目增多可上下滑动查看
+  Widget _buildHistorySection() {
+    return Consumer<HistoryService>(
+      builder: (context, history, child) {
+        final items = history.items;
+        if (items.isEmpty) {
+          // 无历史记录时不占额外空间
+          return const SizedBox.shrink();
+        }
+
+        return Container(
+          // 固定高度区域，内部列表可滚动，避免挤压下方按键区域
+          height: 140,
+          margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+          decoration: BoxDecoration(
+            color: CyberColors.surface.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: CyberColors.numberGlow.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Column(
+            children: [
+              // 历史记录标题 + 清空按钮
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(
+                  children: [
+                    Text(
+                      '历史记录',
+                      style: TextStyle(
+                        color: CyberColors.secondaryText,
+                        fontSize: 12,
+                        fontFamily: 'Orbitron',
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => _confirmClearHistory(history),
+                      style: TextButton.styleFrom(
+                        foregroundColor: CyberColors.error,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      child: const Text(
+                        '清空全部',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'Orbitron',
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 可滚动历史列表
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  itemCount: items.length,
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    return _HistoryTile(
+                      item: item,
+                      onTap: () {
+                        // 点击历史条目恢复算式与结果
+                        final calc = context.read<CalculatorService>();
+                        calc.restoreFromHistory(item.expression, item.result);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 确认清空历史记录
+  void _confirmClearHistory(HistoryService history) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: CyberColors.surface,
+        title: const Text(
+          '清空历史',
+          style: TextStyle(fontFamily: 'Orbitron', color: Colors.white),
+        ),
+        content: const Text(
+          '确定要清除所有计算历史吗？\n此操作不可恢复。',
+          style: TextStyle(fontFamily: 'Orbitron', fontSize: 14, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () {
+              history.clearAll();
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('确定清空', style: TextStyle(color: CyberColors.error)),
+          ),
+        ],
       ),
     );
   }
@@ -307,6 +437,23 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 ],
               );
             },
+          ),
+          const SizedBox(width: 4),
+          // 设置按钮（标题栏右上角）
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+            icon: const Icon(
+              Icons.settings,
+              color: CyberColors.navActive,
+              size: 20,
+            ),
+            tooltip: '设置',
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
         ],
       ),
@@ -542,6 +689,69 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             child: const Text('去设置', style: TextStyle(color: Color(0xFF00F0FF))),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 历史记录条目组件
+/// 用于输入框上方的历史列表展示
+class _HistoryTile extends StatelessWidget {
+  final HistoryItem item;
+  final VoidCallback onTap;
+
+  const _HistoryTile({
+    required this.item,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: CyberColors.historyItem,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: item.hasError
+              ? CyberColors.error.withValues(alpha: 0.3)
+              : CyberColors.numberGlow.withValues(alpha: 0.2),
+          width: 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              // 状态图标
+              Icon(
+                item.hasError ? Icons.error_outline : Icons.check_circle_outline,
+                color: item.hasError ? CyberColors.error : CyberColors.success,
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              // 算式 + 结果
+              Expanded(
+                child: Text(
+                  '${item.expression} = ${item.result}',
+                  style: TextStyle(
+                    color: item.hasError
+                        ? CyberColors.error
+                        : CyberColors.primaryText,
+                    fontSize: 13,
+                    fontFamily: 'Orbitron',
+                    letterSpacing: 1,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

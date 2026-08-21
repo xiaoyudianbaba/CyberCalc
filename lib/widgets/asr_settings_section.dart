@@ -177,6 +177,46 @@ class _AsrSettingsSectionState extends State<AsrSettingsSection> {
           ),
           const SizedBox(height: 16),
 
+          // 语音输入提示音开关
+          Row(
+            children: [
+              Icon(Icons.notifications_active,
+                  color: CyberColors.info, size: 16),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '语音输入提示音',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    fontFamily: 'Orbitron',
+                  ),
+                ),
+              ),
+              Switch(
+                value: context.watch<VolcAsrService>().config.promptToneEnabled,
+                activeColor: CyberColors.info,
+                onChanged: (value) async {
+                  await context
+                      .read<VolcAsrService>()
+                      .config
+                      .setPromptToneEnabled(value);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ],
+          ),
+          Text(
+            '开启后，语音开始/结束播放短促提示音（替代较长语音提示）',
+            style: TextStyle(
+              color: CyberColors.disabledText,
+              fontSize: 11,
+              fontFamily: 'Orbitron',
+            ),
+          ),
+          const SizedBox(height: 16),
+
           // 保存按钮
           Row(
             children: [

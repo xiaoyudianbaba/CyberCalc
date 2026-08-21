@@ -27,6 +27,7 @@ class VolcAsrConfig {
   static const String _keyAppId = 'volc_asr_app_id';
   static const String _keyResourceId = 'volc_asr_resource_id';
   static const String _keyUrl = 'volc_asr_url';
+  static const String _keyPromptTone = 'volc_asr_prompt_tone';
 
   // 废弃键（旧版 v2 配置，加载时自动清理）
   static const String _legacyKeyClusterId = 'volc_asr_cluster_id';
@@ -36,6 +37,7 @@ class VolcAsrConfig {
   String _appId = '';
   String _resourceId = '';
   String _url = DEFAULT_URL;
+  bool _promptToneEnabled = true; // 语音输入提示音开关（默认开启）
   bool _loaded = false;
 
   // ========== Getters ==========
@@ -50,6 +52,8 @@ class VolcAsrConfig {
   String get resourceId =>
       _resourceId.isEmpty ? DEFAULT_RESOURCE_ID : _resourceId;
   String get url => _url;
+  /// 语音输入提示音开关
+  bool get promptToneEnabled => _promptToneEnabled;
   bool get hasAccessToken => accessToken != null && accessToken!.isNotEmpty;
   bool get hasAppId => appId.isNotEmpty;
   bool get hasResourceId => resourceId.isNotEmpty;
@@ -68,6 +72,7 @@ class VolcAsrConfig {
       _appId = prefs.getString(_keyAppId) ?? '';
       _resourceId = prefs.getString(_keyResourceId) ?? '';
       _url = prefs.getString(_keyUrl) ?? DEFAULT_URL;
+      _promptToneEnabled = prefs.getBool(_keyPromptTone) ?? true;
       _loaded = true;
 
       // === 旧版 v2 配置自动迁移 ===
@@ -133,6 +138,18 @@ class VolcAsrConfig {
     }
   }
 
+  /// 设置语音输入提示音开关
+  Future<bool> setPromptToneEnabled(bool enabled) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_keyPromptTone, enabled);
+      _promptToneEnabled = enabled;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// 清除所有 ASR 配置
   Future<bool> clear() async {
     try {
@@ -141,10 +158,12 @@ class VolcAsrConfig {
       await prefs.remove(_keyAppId);
       await prefs.remove(_keyResourceId);
       await prefs.remove(_keyUrl);
+      await prefs.remove(_keyPromptTone);
       _accessToken = null;
       _appId = '';
       _resourceId = '';
       _url = DEFAULT_URL;
+      _promptToneEnabled = true;
       return true;
     } catch (e) {
       return false;

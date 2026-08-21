@@ -55,6 +55,17 @@ class AudioService {
     await _playSystemTone(1400, 150);
   }
 
+  /// 播放语音开启提示音（短促单音，高音）
+  /// 用于替代较长的中文语音提示，缩短录音前的等待
+  Future<void> playVoiceStartBeep() async {
+    await _playSystemTone(1320, 120);
+  }
+
+  /// 播放收音结束提示音（短促单音，低音，与开启音区分）
+  Future<void> playVoiceEndBeep() async {
+    await _playSystemTone(880, 120);
+  }
+
   /// 播放系统音调
   /// 使用系统声音生成简单音效，无需音频文件
   Future<void> _playSystemTone(int frequency, int durationMs) async {
@@ -91,6 +102,8 @@ class AudioService {
         return AppConstants.soundBackspace;
       case 1000:
       case 1400:
+      case 1320:
+      case 880:
         return AppConstants.soundVoiceStart;
       default:
         return AppConstants.soundClick;

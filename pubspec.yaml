@@ -1,7 +1,7 @@
 name: cybercalc
 description: "赛博朋克语音计算器 - Cyberpunk Voice Calculator"
 publish_to: 'none'
-version: 1.0.7+7
+version: 1.0.8+8
 
 environment:
   sdk: ^3.12.2

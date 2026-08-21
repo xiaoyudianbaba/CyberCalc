@@ -1,6 +1,8 @@
 /// 计算器主屏幕
 /// 赛博朋克风格的计算器主界面
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/calculator_service.dart';
 import '../services/voice_feedback_service.dart';
@@ -27,6 +29,10 @@ class CalculatorScreen extends StatefulWidget {
 class _CalculatorScreenState extends State<CalculatorScreen> {
   final AudioService _audioService = AudioService();
 
+  /// 长时间无关闲聊（无有效算式）自动关闭收音的定时器
+  Timer? _idleChatTimer;
+  static const Duration _idleChatTimeout = Duration(seconds: 8);
+
   @override
   void initState() {
     super.initState();
@@ -37,6 +43,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       context.read<HistoryService>().loadHistory();
       final asr = context.read<VolcAsrService>();
       asr.onResult = () => _handleAsrResult(asr);
+      asr.onPartial = _handleAsrPartial;
       asr.onListeningStarted = () => _onAsrListeningStarted();
       asr.onListeningStopped = () => _onAsrListeningStopped();
       asr.onError = (msg) => _onAsrError(msg);
@@ -45,8 +52,30 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
 
   @override
   void dispose() {
+    _idleChatTimer?.cancel();
     _audioService.dispose();
     super.dispose();
+  }
+
+  /// 启动"无关闲聊自动关闭"计时（仅在识别出算式内容时取消）
+  void _startIdleChatGuard() {
+    _idleChatTimer?.cancel();
+    _idleChatTimer = Timer(_idleChatTimeout, () {
+      final asr = context.read<VolcAsrService>();
+      if (asr.isListening) {
+        debugPrint('ASR: 长时间未识别到有效算式，自动关闭收音');
+        asr.stopListening();
+        context
+            .read<VoiceFeedbackService>()
+            .speakVoiceStatus('未识别到算式，已关闭语音输入');
+      }
+    });
+  }
+
+  /// 取消"无关闲聊自动关闭"计时（识别出数字/运算符时调用）
+  void _cancelIdleChatGuard() {
+    _idleChatTimer?.cancel();
+    _idleChatTimer = null;
   }
 
   /// ASR 识别结果回调
@@ -64,14 +93,25 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     _handleVoiceResult(filtered);
   }
 
+  /// ASR 实时中间结果回调
+  /// 一旦识别到数字或运算符，取消"无关闲聊自动关闭"计时（说明用户在说算式）
+  void _handleAsrPartial(String text) {
+    if (text.isEmpty) return;
+    if (RegExp(r'[0-9+\-×÷()]').hasMatch(text)) {
+      _cancelIdleChatGuard();
+    }
+  }
+
   /// ASR 开始聆听
   void _onAsrListeningStarted() {
-    // 更新UI，显示聆听状态
+    // 启动无关闲聊自动关闭计时
+    _startIdleChatGuard();
   }
 
   /// ASR 停止聆听
   void _onAsrListeningStopped() {
-    // 更新UI，隐藏聆听状态
+    // 取消无关闲聊自动关闭计时
+    _cancelIdleChatGuard();
   }
 
   /// ASR 错误处理
@@ -253,8 +293,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
 
         return Container(
           // 固定高度区域，内部列表可滚动，避免挤压下方按键区域
-          height: 140,
-          margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+          height: 96,
+          margin: const EdgeInsets.fromLTRB(12, 2, 12, 2),
           decoration: BoxDecoration(
             color: CyberColors.surface.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(12),
@@ -264,16 +304,16 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           ),
           child: Column(
             children: [
-              // 历史记录标题 + 清空按钮
+              // 历史记录标题 + 清空按钮（同一行，精简高度）
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                 child: Row(
                   children: [
                     Text(
                       '历史记录',
                       style: TextStyle(
                         color: CyberColors.secondaryText,
-                        fontSize: 12,
+                        fontSize: 11,
                         fontFamily: 'Orbitron',
                         letterSpacing: 1,
                       ),
@@ -283,13 +323,14 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                       onPressed: () => _confirmClearHistory(history),
                       style: TextButton.styleFrom(
                         foregroundColor: CyberColors.error,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: const Size(0, 28),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        minimumSize: const Size(0, 22),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: const Text(
-                        '清空全部',
+                        '清空历史记录',
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 10,
                           fontFamily: 'Orbitron',
                           letterSpacing: 1,
                         ),
@@ -308,9 +349,23 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     return _HistoryTile(
                       item: item,
                       onTap: () {
-                        // 点击历史条目恢复算式与结果
+                        // 点击历史条目：复用算式（填入输入框）并复制结果
                         final calc = context.read<CalculatorService>();
                         calc.restoreFromHistory(item.expression, item.result);
+                        Clipboard.setData(ClipboardData(text: item.result));
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '已复制结果：${item.result}',
+                                style: const TextStyle(fontFamily: 'Orbitron'),
+                              ),
+                              backgroundColor:
+                                  CyberColors.success.withValues(alpha: 0.85),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
                       },
                     );
                   },
@@ -627,7 +682,10 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     if (asr.isListening) {
       // 停止录音 → 自动发送到火山 ASR → 结果通过 onResult 回调处理
       await asr.stopListening();
-      voice.speakVoiceStatus('语音输入结束');
+      // 播放收音结束提示音（短促单音，受开关控制）
+      if (asr.config.promptToneEnabled) {
+        await _audioService.playVoiceEndBeep();
+      }
     } else {
       // 检查是否已配置 API Key
       if (!asr.config.hasAccessToken) {
@@ -635,17 +693,17 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         return;
       }
 
-      // 先播报提示音并等待播报完成，再加静音缓冲延时，
-      // 确保提示音不被 ASR 录音录入
-      final prompt = '语音输入已开启，请说出算式';
-      await voice.speakVoiceStatusAndWait(prompt);
-      if (!mounted) return;
-      await Future.delayed(const Duration(milliseconds: 300));
+      // 先播放短促提示音（受开关控制），短暂缓冲避免被 ASR 录入，
+      // 替代较长的中文语音提示以缩短录音前等待
+      if (asr.config.promptToneEnabled) {
+        await _audioService.playVoiceStartBeep();
+        if (!mounted) return;
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
 
       // 提示音播放完毕后再开始录音
       final started = await asr.startListening();
       if (started) {
-        // 录音已开始，不再重复播报（避免提示音被录入）
         debugPrint('ASR: 录音已开始');
       } else {
         // 启动失败（无权限、无API Key等），播报错误
@@ -708,7 +766,7 @@ class _HistoryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
+      margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
         color: CyberColors.historyItem,
         borderRadius: BorderRadius.circular(8),
@@ -723,14 +781,14 @@ class _HistoryTile extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           child: Row(
             children: [
               // 状态图标
               Icon(
                 item.hasError ? Icons.error_outline : Icons.check_circle_outline,
                 color: item.hasError ? CyberColors.error : CyberColors.success,
-                size: 16,
+                size: 14,
               ),
               const SizedBox(width: 8),
               // 算式 + 结果
@@ -741,7 +799,7 @@ class _HistoryTile extends StatelessWidget {
                     color: item.hasError
                         ? CyberColors.error
                         : CyberColors.primaryText,
-                    fontSize: 13,
+                    fontSize: 12,
                     fontFamily: 'Orbitron',
                     letterSpacing: 1,
                   ),

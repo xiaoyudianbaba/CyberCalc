@@ -58,11 +58,12 @@ class VolcAsrService extends ChangeNotifier {
 
   // ========== 流式录音（静音检测用） ==========
   StreamSubscription<Uint8List>? _audioStreamSub;
-  final BytesBuilder _pcmBuffer = BytesBuilder(copy: false);
   // 采样率：与 RecordConfig 保持一致
   static const int _sampleRate = 16000;
   // 人声振幅阈值（RMS），低于此值视为静音（16bit PCM 可调）
   static const double _voiceRmsThreshold = 800;
+  // 发送阈值（RMS）：低于此值的近静音分块不发送到服务端，过滤无效静音
+  static const double _minSendRms = 200;
   // 静音停止时长：检测到人声后，连续静音达到该时长自动停止录音（可调）
   static const Duration _silenceStopTimeout = Duration(milliseconds: 800);
   // 最长录音时长：防止无静音场景下无限录音（可调）
@@ -78,6 +79,7 @@ class VolcAsrService extends ChangeNotifier {
 
   // ========== 回调 ==========
   VoidCallback? onResult;
+  Function(String)? onPartial;
   VoidCallback? onListeningStarted;
   VoidCallback? onListeningStopped;
   Function(String)? onError;
@@ -233,7 +235,6 @@ class VolcAsrService extends ChangeNotifier {
     _lastError = '';
     _reqId = '${DateTime.now().millisecondsSinceEpoch}${_config.appId}';
     // 重置流式录音状态
-    _pcmBuffer.clear();
     _speechDetected = false;
     _stopRequested = false;
     _silenceTimer.stop();
@@ -241,7 +242,16 @@ class VolcAsrService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // 流式录音：直接采集原始 PCM 字节流，用于实时静音检测
+      // 边录边发：先建立 WebSocket 连接并发送首包，缩短识别启动等待
+      final connected = await _connectAndInit();
+      if (!connected) {
+        _state = AsrServiceState.error;
+        onError?.call(_lastError);
+        notifyListeners();
+        return false;
+      }
+
+      // 流式录音：直接采集原始 PCM 字节流，实时转发到服务端并做静音检测
       _recorder = AudioRecorder();
       final stream = await _recorder!.startStream(
         const RecordConfig(
@@ -262,10 +272,11 @@ class VolcAsrService extends ChangeNotifier {
       onListeningStarted?.call();
       notifyListeners();
 
-      // 最长录音时长兜底：即使无静音也会自动停止
+      // 最长录音时长兜底：即使无静音也会自动停止（防卡死）
       _timeoutTimer = Timer(_maxRecordTimeout, () {
         if (_state == AsrServiceState.recording) {
           debugPrint('ASR: 超过最长录音时长(${_maxRecordTimeout.inSeconds}s)，自动停止');
+          _stopRequested = true;
           stopListening();
         }
       });
@@ -280,109 +291,21 @@ class VolcAsrService extends ChangeNotifier {
     }
   }
 
-  // ========== 音频分块处理（静音检测） ==========
+  // ========== WebSocket 连接与首包 ==========
 
-  /// 计算 16bit PCM 分块的 RMS 振幅
-  static double _calcRms(Uint8List chunk) {
-    if (chunk.length < 2) return 0;
-    final data = ByteData.sublistView(chunk);
-    double sum = 0;
-    int count = 0;
-    for (int i = 0; i + 1 < chunk.length; i += 2) {
-      final sample = data.getInt16(i, Endian.little);
-      sum += sample * sample;
-      count++;
-    }
-    if (count == 0) return 0;
-    return sqrt(sum / count);
-  }
-
-  /// 处理实时音频分块：
-  /// - 缓冲 PCM 数据供发送
-  /// - 检测人声与静音，静音达到阈值自动停止录音
-  void _handleAudioChunk(Uint8List chunk) {
-    if (_state != AsrServiceState.recording || _stopRequested) return;
-
-    _pcmBuffer.add(chunk);
-
-    final rms = _calcRms(chunk);
-    if (rms >= _voiceRmsThreshold) {
-      // 检测到人声，重置静音计时
-      _speechDetected = true;
-      _silenceTimer.stop();
-      _silenceTimer.reset();
-    } else if (_speechDetected) {
-      // 已有人声且当前为静音，累计静音时长
-      if (!_silenceTimer.isRunning) _silenceTimer.start();
-      if (_silenceTimer.elapsedMilliseconds >= _silenceStopTimeout.inMilliseconds) {
-        debugPrint('ASR: 检测到静音 ${_silenceStopTimeout.inMilliseconds}ms，自动停止');
-        _stopRequested = true;
-        stopListening();
-      }
-    }
-  }
-
-  // ========== 停止录音 + 发送 ASR 请求 ==========
-
-  Future<void> stopListening() async {
-    if (_state != AsrServiceState.recording) return;
-    _timeoutTimer?.cancel();
-
+  /// 建立 WebSocket 连接、发送首包，并开始监听服务端流式响应
+  /// 返回是否连接成功（失败原因写入 _lastError）
+  Future<bool> _connectAndInit() async {
     try {
-      // 停止流式录音，收集已缓冲的 PCM 数据
-      await _audioStreamSub?.cancel();
-      _audioStreamSub = null;
-      await _recorder?.stop();
-      _recorder?.dispose();
-      _recorder = null;
-
-      final pcmData = _pcmBuffer.takeBytes();
-      if (pcmData.isEmpty) {
-        _lastError = '未采集到有效音频';
-        _state = AsrServiceState.idle;
-        onError?.call(_lastError);
-        onListeningStopped?.call();
-        notifyListeners();
-        return;
-      }
-
-      _state = AsrServiceState.connecting;
-      notifyListeners();
-
-      await _sendAsrRequest(pcmData);
-
-    } catch (e) {
-      _lastError = '停止录音失败: $e';
-      _state = AsrServiceState.error;
-      onError?.call(_lastError);
-      onListeningStopped?.call();
-      notifyListeners();
-    }
-  }
-
-  // ========== 发送火山引擎 ASR v3 二进制帧请求 ==========
-
-  Future<void> _sendAsrRequest(Uint8List pcmData) async {
-    try {
-      _state = AsrServiceState.recognizing;
-      notifyListeners();
-
-      // === 1. 建立 WebSocket 连接 ===
       final wsUrl = _config.url.trim();
       if (!wsUrl.startsWith('wss://')) {
         _lastError = '接口地址必须以 wss:// 开头';
-        onError?.call(_lastError);
-        _state = AsrServiceState.idle;
-        onListeningStopped?.call();
-        notifyListeners();
-        return;
+        return false;
       }
 
-      // 火山引擎 v3 协议鉴权头
       _reqId = _genUuid();
       final connectId = _genUuid();
       debugPrint('ASR: 连接 $wsUrl');
-      debugPrint('ASR: AppId=${_config.appId} ResourceId=${_config.resourceId}');
 
       _channel = IOWebSocketChannel.connect(
         Uri.parse(wsUrl),
@@ -396,7 +319,7 @@ class VolcAsrService extends ChangeNotifier {
       await _channel!.ready;
       debugPrint('ASR: WebSocket 连接成功');
 
-      // === 2. 发送首包（full client request, message_type=0x01）===
+      // 发送首包（full client request, message_type=0x01）
       final firstJson = jsonEncode({
         'user': {
           'uid': 'flutter_user_001',
@@ -424,32 +347,7 @@ class VolcAsrService extends ChangeNotifier {
       _channel!.sink.add(firstFrame);
       debugPrint('ASR: 首包已发送 (${firstPayload.length} bytes gzip)');
 
-      // === 3. 分片发送音频数据（audio only, message_type=0x02）===
-      const int chunkSize = 3200; // 100ms PCM 数据
-      int totalSent = 0;
-      final totalLen = pcmData.length;
-
-      for (int offset = 0; offset < totalLen; offset += chunkSize) {
-        final end = (offset + chunkSize > totalLen) ? totalLen : offset + chunkSize;
-        final chunk = Uint8List.sublistView(pcmData, offset, end);
-        final isLast = (end >= totalLen);
-
-        final audioFrame = _buildFrame(
-          _MSG_AUDIO_ONLY,
-          isLast ? _FLAG_LAST : _FLAG_NO_SEQUENCE,
-          _SERIAL_BYTES, _COMPRESS_GZIP,
-          Uint8List.fromList(gzip.encode(chunk)),
-        );
-        _channel!.sink.add(audioFrame);
-        totalSent += chunk.length;
-
-        // 控制发送速率
-        await Future.delayed(const Duration(milliseconds: 30));
-      }
-
-      debugPrint('ASR: 音频数据发送完成 ($totalSent bytes)');
-
-      // === 4. 接收服务端响应 ===
+      // 开始监听响应（服务端会流式返回识别结果）
       _resultSubscription = _channel!.stream.listen(
         (message) {
           if (message is Uint8List) {
@@ -475,7 +373,106 @@ class VolcAsrService extends ChangeNotifier {
         },
       );
 
-      // 5 秒响应超时
+      return true;
+    } catch (e) {
+      debugPrint('ASR: 连接失败: $e');
+      _lastError = '连接火山引擎 ASR 失败，请检查配置和网络';
+      _cleanupWs();
+      return false;
+    }
+  }
+
+  // ========== 音频分块处理（静音检测 + 实时转发） ==========
+
+  /// 计算 16bit PCM 分块的 RMS 振幅
+  static double _calcRms(Uint8List chunk) {
+    if (chunk.length < 2) return 0;
+    final data = ByteData.sublistView(chunk);
+    double sum = 0;
+    int count = 0;
+    for (int i = 0; i + 1 < chunk.length; i += 2) {
+      final sample = data.getInt16(i, Endian.little);
+      sum += sample * sample;
+      count++;
+    }
+    if (count == 0) return 0;
+    return sqrt(sum / count);
+  }
+
+  /// 处理实时音频分块：
+  /// - 过滤无效静音后将 PCM 实时转发到 ASR 服务端（边录边发）
+  /// - 检测人声与静音，静音达到阈值自动停止录音
+  void _handleAudioChunk(Uint8List chunk) {
+    if (_state != AsrServiceState.recording || _stopRequested) return;
+
+    // 计算振幅用于静音检测，并过滤近静音分块（不发送到服务端）
+    final rms = _calcRms(chunk);
+    if (rms >= _minSendRms) {
+      _sendAudioChunk(chunk);
+    }
+
+    if (rms >= _voiceRmsThreshold) {
+      // 检测到人声，重置静音计时
+      _speechDetected = true;
+      _silenceTimer.stop();
+      _silenceTimer.reset();
+    } else if (_speechDetected) {
+      // 已有人声且当前为静音，累计静音时长
+      if (!_silenceTimer.isRunning) _silenceTimer.start();
+      if (_silenceTimer.elapsedMilliseconds >= _silenceStopTimeout.inMilliseconds) {
+        debugPrint('ASR: 检测到静音 ${_silenceStopTimeout.inMilliseconds}ms，自动停止');
+        _stopRequested = true;
+        stopListening();
+      }
+    }
+  }
+
+  /// 将单块 PCM 音频实时发送到 ASR 服务端（不带序列号，gzip 压缩）
+  void _sendAudioChunk(Uint8List chunk) {
+    if (_channel == null) return;
+    try {
+      final audioFrame = _buildFrame(
+        _MSG_AUDIO_ONLY,
+        _FLAG_NO_SEQUENCE,
+        _SERIAL_BYTES, _COMPRESS_GZIP,
+        Uint8List.fromList(gzip.encode(chunk)),
+      );
+      _channel!.sink.add(audioFrame);
+    } catch (e) {
+      debugPrint('ASR: 发送音频分块失败: $e');
+    }
+  }
+
+  // ========== 停止录音 ==========
+
+  Future<void> stopListening() async {
+    if (_state != AsrServiceState.recording) return;
+    _timeoutTimer?.cancel();
+
+    try {
+      // 停止流式录音
+      await _audioStreamSub?.cancel();
+      _audioStreamSub = null;
+      await _recorder?.stop();
+      _recorder?.dispose();
+      _recorder = null;
+
+      // 发送最后一包（空音频，flags=LAST），标识音频流结束
+      if (_channel != null) {
+        try {
+          final lastFrame = _buildFrame(
+            _MSG_AUDIO_ONLY, _FLAG_LAST,
+            _SERIAL_BYTES, _COMPRESS_NONE, Uint8List(0),
+          );
+          _channel!.sink.add(lastFrame);
+        } catch (_) {}
+      }
+
+      // 进入识别等待状态，等待服务端最终识别结果
+      _state = AsrServiceState.recognizing;
+      notifyListeners();
+
+      // 响应超时兜底（防卡死）
       _timeoutTimer = Timer(const Duration(seconds: 5), () {
         if (_state == AsrServiceState.recognizing) {
           debugPrint('ASR: 响应超时，关闭连接');
@@ -485,14 +482,11 @@ class VolcAsrService extends ChangeNotifier {
           notifyListeners();
         }
       });
-
     } catch (e) {
-      debugPrint('ASR: 请求失败: $e');
-      _lastError = '连接火山引擎 ASR 失败，请检查配置和网络';
+      _lastError = '停止录音失败: $e';
       _state = AsrServiceState.error;
       onError?.call(_lastError);
       onListeningStopped?.call();
-      _cleanupWs();
       notifyListeners();
     }
   }
@@ -566,12 +560,18 @@ class VolcAsrService extends ChangeNotifier {
 
         if (recognizedText.isNotEmpty) {
           _partialText = recognizedText;
-          onResult?.call();
+          if (isFinal || data['type'] == 'final') {
+            onResult?.call();
+          } else {
+            onPartial?.call(recognizedText);
+          }
           notifyListeners();
         }
 
         // 识别结束
         if (isFinal || data['type'] == 'final') {
+          // 会话销毁时清空临时识别文本（语音识别记忆），避免残留
+          _partialText = '';
           _cleanupWs();
           _state = AsrServiceState.idle;
           onListeningStopped?.call();
@@ -607,7 +607,6 @@ class VolcAsrService extends ChangeNotifier {
         _recorder = null;
       }).catchError((_) {});
     }
-    _pcmBuffer.clear();
     _cleanupWs();
     _state = AsrServiceState.idle;
     _partialText = '';

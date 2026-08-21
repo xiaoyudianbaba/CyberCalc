@@ -116,10 +116,7 @@ class CalculatorService extends ChangeNotifier {
     // 计算
     String calcResult = MathParser.calculate(_expression);
 
-    if (calcResult.startsWith('表达式错误') ||
-        calcResult == '语法错误' ||
-        calcResult == '计算出错' ||
-        calcResult == '除以零') {
+    if (MathParser.isError(calcResult)) {
       _hasError = true;
       _errorMessage = calcResult;
       notifyListeners();
